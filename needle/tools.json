@@ -1,0 +1,64 @@
+[
+  {
+    "name": "find_videos",
+    "description": "Find videos the user has selected, optionally filtering by minimum file size in megabytes and sorting largest first.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "minimum_size_mb": {
+          "type": "integer",
+          "description": "Minimum file size in MB",
+          "default": 0
+        },
+        "sort": {
+          "type": "string",
+          "enum": [
+            "largest_first",
+            "smallest_first",
+            "newest_first"
+          ],
+          "default": "largest_first"
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "suggest_compression",
+    "description": "Estimate suitable compression settings for a selected video. This only makes a recommendation; no file is changed.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "quality": {
+          "type": "string",
+          "enum": [
+            "smallest",
+            "balanced",
+            "high_quality"
+          ],
+          "default": "balanced"
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "compress_selected_video",
+    "description": "Ask to compress one video that the user previously selected. This must display a confirmation and output preview before execution; never delete the original.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "quality": {
+          "type": "string",
+          "enum": [
+            "smallest",
+            "balanced",
+            "high_quality"
+          ],
+          "default": "balanced"
+        }
+      },
+      "required": []
+    }
+  }
+]
