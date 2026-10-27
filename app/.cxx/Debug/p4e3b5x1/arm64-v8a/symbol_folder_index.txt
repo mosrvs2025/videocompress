@@ -1,0 +1,1 @@
+/home/user/videocompress/app/build/intermediates/cxx/Debug/p4e3b5x1/obj/arm64-v8a

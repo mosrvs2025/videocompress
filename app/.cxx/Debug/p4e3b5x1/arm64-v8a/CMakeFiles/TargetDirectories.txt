@@ -1,0 +1,3 @@
+/home/user/videocompress/app/.cxx/Debug/p4e3b5x1/arm64-v8a/CMakeFiles/needle_jni.dir
+/home/user/videocompress/app/.cxx/Debug/p4e3b5x1/arm64-v8a/CMakeFiles/edit_cache.dir
+/home/user/videocompress/app/.cxx/Debug/p4e3b5x1/arm64-v8a/CMakeFiles/rebuild_cache.dir
