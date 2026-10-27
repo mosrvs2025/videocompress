@@ -25,6 +25,9 @@ import androidx.media3.transformer.Transformer
 import androidx.media3.transformer.Composition
 import java.io.File
 import java.util.Locale
+import androidx.media3.transformer.DefaultEncoderFactory
+import androidx.media3.transformer.VideoEncoderSettings
+import android.media.MediaMetadataRetriever
 
 data class VideoFile(val uri: Uri, val name: String, val bytes: Long)
 
@@ -45,6 +48,8 @@ class MainActivity : Activity() {
     private var busy = false
     private var quality = Quality.BALANCED
     private var minimumMb = 0L
+    private lateinit var needle: NeedleEngine
+    private lateinit var engineLabel: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,8 +65,9 @@ class MainActivity : Activity() {
             setPadding(0, 7, 0, 8)
         }
         root.addView(label("PocketPilot", 30f))
-        root.addView(label("Private video assistant · v0.2", 14f))
-        root.addView(label("Commands currently use a local rule engine. Needle 3 is not connected yet.", 12f))
+        root.addView(label("Private video assistant · v0.3", 14f))
+        engineLabel = label("Loading Needle 3 on-device model…", 12f)
+        root.addView(engineLabel)
         command = EditText(this).apply {
             hint = "Find videos over 500 MB"
             setHintTextColor(Color.LTGRAY)
@@ -108,10 +114,48 @@ class MainActivity : Activity() {
         status = label("No files modified. Original videos are always kept.", 13f)
         root.addView(status)
         setContentView(root)
+        needle = NeedleEngine(applicationContext)
+        needle.start { ok ->
+            ui.post {
+                engineLabel.text = if (ok) "Engine: Needle 3 on-device (prefix ${needle.initPrefixTokens} tokens)"
+                else "Needle unavailable (${needle.loadError}); using rule-based fallback."
+            }
+        }
     }
 
     private fun runCommand() {
-        when (val action = CommandRouter.parse(command.text.toString())) {
+        val text = command.text.toString()
+        if (!needle.ready) { applyLocal(CommandRouter.parse(text), "rules (Needle not loaded)"); return }
+        status.text = "Asking Needle 3…"
+        needle.run(text) { result ->
+            ui.post {
+                result.fold({ (r, ms) -> applyNeedle(r, ms) }, {
+                    applyLocal(CommandRouter.parse(text), "rules (Needle error: ${it.message})")
+                })
+            }
+        }
+    }
+
+    private fun applyNeedle(r: NeedleResult, ms: Long) {
+        val conf = r.confidence
+        val tag = "Needle 3 · ${ms} ms · conf ${conf?.let { String.format(Locale.US, "%.2f", it) } ?: "n/a"}"
+        if (r.calls.isEmpty()) { status.text = "$tag — no matching action${if (r.rejected.isNotEmpty()) " (rejected: ${r.rejected})" else ""}."; return }
+        if (conf != null && conf < ToolCallParser.MIN_CONFIDENCE) { status.text = "$tag — confidence too low, ignored."; return }
+        val call = r.calls.first()
+        when (call) {
+            is ToolCall.FindVideos -> { minimumMb = call.minimumMb; render(); status.text = "$tag → find_videos(min ${call.minimumMb} MB, ${call.sort})" }
+            is ToolCall.SuggestCompression -> { quality = call.quality; updateCompressButton(); status.text = "$tag → suggest ${call.quality.name} (${call.quality.height}p). Nothing changed." }
+            is ToolCall.CompressSelected -> { quality = call.quality; updateCompressButton(); status.text = "$tag → compress ${call.quality.name}. Choose a video and press Compress to confirm." }
+        }
+    }
+
+    private fun applyLocal(cmd: Command, why: String) {
+        status.text = "Handled by $why."
+        runLocal(cmd)
+    }
+
+    private fun runLocal(action: Command) {
+        when (action) {
             is Command.Filter -> { minimumMb = action.minimumMb; render() }
             is Command.Compress -> { quality = action.quality; updateCompressButton(); status.text = "Selected preset: ${quality.name}. Choose a video and confirm." }
             Command.Help -> status.text = "Try: 'show videos over 500 MB', 'compress high quality', or 'compress smallest'."
@@ -157,18 +201,33 @@ class MainActivity : Activity() {
         status.text = "Preparing encoder..."
         val output = File(cacheDir, "pocketpilot-${System.currentTimeMillis()}.mp4")
         activeFile = output
+        val sourceHeight = try {
+            MediaMetadataRetriever().run {
+                try { setDataSource(this@MainActivity, video.uri); extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0 }
+                finally { release() }
+            }
+        } catch (e: Exception) { 0 }
+        val videoEffects = if (sourceHeight == 0 || sourceHeight > quality.height) listOf(Presentation.createForHeight(quality.height)) else emptyList()
         val edit = EditedMediaItem.Builder(MediaItem.fromUri(video.uri))
-            .setEffects(Effects(emptyList(), listOf(Presentation.createForHeight(quality.height))))
+            .setEffects(Effects(emptyList(), videoEffects))
             .build()
+        val bitrate = when (quality) { Quality.SMALL -> 1_000_000; Quality.BALANCED -> 2_500_000; Quality.HIGH -> 5_000_000 }
         transformer = Transformer.Builder(this)
             .setVideoMimeType(MimeTypes.VIDEO_H264)
+            .setEncoderFactory(
+                DefaultEncoderFactory.Builder(this)
+                    .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(bitrate).build())
+                    .build()
+            )
             .addListener(object : Transformer.Listener {
                 override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                     busy = false
                     progress.visibility = View.GONE
                     updateCompressButton()
+                    val outBytes = output.length()
                     if (copyToGallery(output, video.name)) {
-                        status.text = "Saved compressed copy: ${fmt(output.length())} (original ${fmt(video.bytes)}). Look in Movies/PocketPilot."
+                        val saved = if (video.bytes > 0) 100.0 * (video.bytes - outBytes) / video.bytes else 0.0
+                        status.text = "Saved compressed copy: ${fmt(outBytes)} (original ${fmt(video.bytes)}, ${String.format(Locale.US, "%.0f", saved)}% saved${if (outBytes >= video.bytes) " — output not smaller; keep the original" else ""}). Look in Movies/PocketPilot."
                     } else status.text = "Export finished but couldn't save to gallery. Temporary file remains in app cache."
                 }
                 override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
